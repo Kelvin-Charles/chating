@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+    <h2>Welcome to the Chat Room, {{ username }}!</h2>
+    <div id="messages"></div>
+    <input type="text" id="message" placeholder="Type a message...">
+    <button onclick="sendMessage()">Send</button>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script type="text/javascript" charset="utf-8">
+        var socket = io.connect('http://' + document.domain + ':' + location.port);
+        socket.on('message', function(msg) {
+            var messageBox = document.getElementById('messages');
+            var message = document.createElement('div');
+            message.textContent = msg;
+            messageBox.appendChild(message);
+        });
+
+        function sendMessage() {
+            var messageInput = document.getElementById('message');
+            var message = messageInput.value;
+            socket.send(message);
+            messageInput.value = '';
+        }
+    </script>
+{% endblock %}
