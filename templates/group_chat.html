@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="chat-room-container">
+    <div class="chat-header">
+        <div class="group-info">
+            <div class="group-avatar">
+                <i class="fas fa-users"></i>
+            </div>
+            <div class="group-details">
+                <h2>{{ group.name }}</h2>
+                <span class="member-count">{{ group.members|length }} wanachama</span>
+            </div>
+        </div>
+        <div class="group-actions">
+            {% if current_user.id == group.admin_id %}
+            <button class="btn btn-secondary" id="addMemberBtn">
+                <i class="fas fa-user-plus"></i> Ongeza Mwanachama
+            </button>
+            {% endif %}
+            <button class="btn btn-outline" id="viewMembersBtn">
+                <i class="fas fa-users"></i> Angalia Wanachama
+            </button>
+        </div>
+    </div>
+
+    <div class="chat-messages" id="chat-messages">
+        {% for message in messages %}
+        <div class="message {% if message.sender_id == current_user.id %}sent{% else %}received{% endif %}">
+            <div class="message-content">
+                <div class="message-header">
+                    <strong>{{ message.sender.username }}</strong>
+                    <small>{{ message.timestamp.strftime('%H:%M') }}</small>
+                </div>
+                <p>{{ message.content }}</p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="message-form">
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="form-group">
+                {{ form.content(class="form-control", placeholder="Andika ujumbe...") }}
+            </div>
+            {{ form.submit(class="btn btn-primary") }}
+        </form>
+    </div>
+</div>
+
+<!-- Members Modal -->
+<div id="membersModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Wanachama wa Kikundi</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <ul class="members-list">
+                {% for member in group.members %}
+                <li class="member-item">
+                    {% if member.user.avatar_url %}
+                        <img src="{{ url_for('static', filename=member.user.avatar_url) }}" alt="{{ member.user.username }}" class="member-avatar">
+                    {% else %}
+                        <div class="member-avatar-placeholder">{{ member.user.username[0].upper() }}</div>
+                    {% endif %}
+                    <span class="member-name">{{ member.user.username }}</span>
+                    {% if member.user.id == group.admin_id %}
+                        <span class="admin-badge">Admin</span>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+</div>
+
+{% if current_user.id == group.admin_id %}
+<!-- Add Member Modal -->
+<div id="addMemberModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Ongeza Mwanachama</h3>
+            <button class="close-btn">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="search-box">
+                <input type="text" id="memberSearch" placeholder="Tafuta mtumiaji...">
+            </div>
+            <ul class="users-list" id="usersList">
+                <!-- Users will be loaded here via JavaScript -->
+            </ul>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Auto-scroll to bottom of chat
+    function scrollToBottom() {
+        const chatMessages = document.getElementById('chat-messages');
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Scroll on page load
+    window.onload = scrollToBottom;
+
+    // Modal functionality
+    const membersModal = document.getElementById('membersModal');
+    const viewMembersBtn = document.getElementById('viewMembersBtn');
+    const addMemberModal = document.getElementById('addMemberModal');
+    const addMemberBtn = document.getElementById('addMemberBtn');
+    const closeBtns = document.querySelectorAll('.close-btn');
+
+    viewMembersBtn.onclick = () => membersModal.style.display = 'block';
+    if (addMemberBtn) {
+        addMemberBtn.onclick = () => addMemberModal.style.display = 'block';
+    }
+
+    closeBtns.forEach(btn => {
+        btn.onclick = function() {
+            membersModal.style.display = 'none';
+            if (addMemberModal) {
+                addMemberModal.style.display = 'none';
+            }
+        }
+    });
+
+    // Add member functionality
+    if (addMemberModal) {
+        const memberSearch = document.getElementById('memberSearch');
+        const usersList = document.getElementById('usersList');
+
+        memberSearch.addEventListener('input', async (e) => {
+            const searchTerm = e.target.value;
+            if (searchTerm.length >= 2) {
+                const response = await fetch(`/api/search_users?q=${searchTerm}&group_id={{ group.id }}`);
+                const users = await response.json();
+                
+                usersList.innerHTML = users.map(user => `
+                    <li class="user-item">
+                        <div class="user-info">
+                            <span class="username">${user.username}</span>
+                        </div>
+                        <button class="btn btn-small btn-primary add-user" data-user-id="${user.id}">
+                            Ongeza
+                        </button>
+                    </li>
+                `).join('');
+
+                // Add click handlers for add buttons
+                document.querySelectorAll('.add-user').forEach(btn => {
+                    btn.onclick = async function() {
+                        const userId = this.dataset.userId;
+                        const response = await fetch('/api/add_group_member', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                group_id: {{ group.id }},
+                                user_id: userId
+                            })
+                        });
+
+                        if (response.ok) {
+                            location.reload();
+                        }
+                    };
+                });
+            }
+        });
+    }
+</script>
+{% endblock %} 

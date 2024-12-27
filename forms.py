@@ -19,7 +19,8 @@ class MessageForm(FlaskForm):
     submit = SubmitField('Send')
 
 class GroupChatForm(FlaskForm):
-    name = StringField('Group Name', validators=[DataRequired()])
+    name = StringField('Group Name', validators=[DataRequired(), Length(min=3, max=50)])
+    description = TextAreaField('Description', validators=[Length(max=200)])
     submit = SubmitField('Create Group')
 
 class ProfileForm(FlaskForm):
