@@ -13,6 +13,10 @@ class User(UserMixin, db.Model):
     avatar_url = db.Column(db.String(200))
     is_admin = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Add these relationships
+    groups = db.relationship('GroupChat', secondary='group_member', 
+                           backref=db.backref('user_members', lazy='dynamic'))
 
 class PrivateMessage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -24,21 +28,34 @@ class PrivateMessage(db.Model):
 
 class GroupChat(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(50), nullable=False)
+    description = db.Column(db.String(200))
+    admin_id = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_group_admin'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    members = db.relationship('GroupMember', backref='group', lazy=True)
+    messages = db.relationship('GroupMessage', backref='group', lazy=True)
+    admin = db.relationship('User', foreign_keys=[admin_id], backref='administered_groups')
 
 class GroupMessage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('group_chat.id'), nullable=False)
-    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('group_chat.id', name='fk_message_group'), nullable=False)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_message_sender'), nullable=False)
     content = db.Column(db.String(500), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Add relationship to sender
+    sender = db.relationship('User', backref='group_messages')
 
 class GroupMember(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('group_chat.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    group_id = db.Column(db.Integer, db.ForeignKey('group_chat.id', name='fk_member_group'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id', name='fk_member_user'), nullable=False)
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Add relationship to user
+    user = db.relationship('User', backref='group_memberships')
 
 class Notification(db.Model):
     id = db.Column(db.Integer, primary_key=True)

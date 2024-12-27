@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,10 +8,13 @@ from datetime import datetime
 import os
 from werkzeug.utils import secure_filename
 from wtforms.validators import DataRequired, Email, Length, EqualTo
+from sqlalchemy import or_
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'your_secret_key_here'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 db.init_app(app)
 migrate = Migrate(app, db)
 
@@ -155,8 +158,13 @@ def private_chat(user_id):
 @login_required
 def group_chat(group_id):
     group = GroupChat.query.get_or_404(group_id)
-    form = MessageForm()
     
+    # Check if user is a member of the group
+    if not GroupMember.query.filter_by(user_id=current_user.id, group_id=group_id).first():
+        flash('You are not a member of this group')
+        return redirect(url_for('chat_dashboard'))
+    
+    form = MessageForm()
     if form.validate_on_submit():
         message = GroupMessage(
             group_id=group_id,
@@ -164,6 +172,17 @@ def group_chat(group_id):
             content=form.content.data
         )
         db.session.add(message)
+        
+        # Create notifications for all group members except sender
+        for member in group.members:
+            if member.user_id != current_user.id:
+                notification = Notification(
+                    user_id=member.user_id,
+                    content=f"New message in {group.name} from {current_user.username}",
+                    type='group'
+                )
+                db.session.add(notification)
+        
         db.session.commit()
         return redirect(url_for('group_chat', group_id=group_id))
     
@@ -258,6 +277,110 @@ def inject_notifications():
         ).all()
         return {'notifications': notifications}
     return {'notifications': []}
+
+@app.route('/create_group', methods=['GET', 'POST'])
+@login_required
+def create_group():
+    form = GroupChatForm()
+    if form.validate_on_submit():
+        group = GroupChat(
+            name=form.name.data,
+            description=form.description.data,
+            admin_id=current_user.id
+        )
+        db.session.add(group)
+        db.session.commit()
+        
+        # Add creator as first member
+        member = GroupMember(user_id=current_user.id, group_id=group.id)
+        db.session.add(member)
+        db.session.commit()
+        
+        flash('Group created successfully!')
+        return redirect(url_for('group_chat', group_id=group.id))
+    
+    return render_template('create_group.html', form=form)
+
+# API Routes for group management
+@app.route('/api/search_users')
+@login_required
+def search_users():
+    query = request.args.get('q', '')
+    group_id = request.args.get('group_id', type=int)
+    
+    if not query or not group_id:
+        return jsonify([])
+    
+    # Get existing member IDs
+    existing_members = GroupMember.query.filter_by(group_id=group_id).with_entities(GroupMember.user_id).all()
+    existing_member_ids = [member[0] for member in existing_members]
+    
+    # Search for users not in the group
+    users = User.query.filter(
+        User.id.notin_(existing_member_ids),
+        or_(
+            User.username.ilike(f'%{query}%'),
+            User.email.ilike(f'%{query}%')
+        )
+    ).limit(10).all()
+    
+    return jsonify([{
+        'id': user.id,
+        'username': user.username,
+        'avatar_url': user.avatar_url
+    } for user in users])
+
+@app.route('/api/add_group_member', methods=['POST'])
+@login_required
+def add_group_member():
+    data = request.get_json()
+    group_id = data.get('group_id')
+    user_id = data.get('user_id')
+    
+    group = GroupChat.query.get_or_404(group_id)
+    
+    # Check if current user is admin
+    if group.admin_id != current_user.id:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    # Check if user is already a member
+    if GroupMember.query.filter_by(group_id=group_id, user_id=user_id).first():
+        return jsonify({'error': 'User is already a member'}), 400
+    
+    member = GroupMember(group_id=group_id, user_id=user_id)
+    db.session.add(member)
+    
+    # Create notification for added user
+    notification = Notification(
+        user_id=user_id,
+        content=f"You were added to group {group.name}",
+        type='group'
+    )
+    db.session.add(notification)
+
+    db.session.commit()
+    return jsonify({'success': True})
+
+@app.route('/leave_group/<int:group_id>', methods=['POST'])
+@login_required
+def leave_group(group_id):
+    member = GroupMember.query.filter_by(
+        group_id=group_id,
+        user_id=current_user.id
+    ).first_or_404()
+    
+    group = GroupChat.query.get_or_404(group_id)
+    
+    # Don't allow admin to leave without transferring ownership
+    if group.admin_id == current_user.id:
+        flash('Admin cannot leave the group without transferring ownership')
+        return redirect(url_for('group_chat', group_id=group_id))
+    
+    db.session.delete(member)
+    db.session.commit()
+
+    flash('You have left the group')
+    return redirect(url_for('chat_dashboard'))
 
 if __name__ == '__main__':
     with app.app_context():
