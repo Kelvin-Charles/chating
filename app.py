@@ -1,18 +1,36 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+import os
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, stream_with_context
 from flask_login import LoginManager, login_user, login_required, logout_user, current_user
 from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, User, PrivateMessage, GroupChat, GroupMessage, GroupMember, Notification
 from forms import SignUpForm, LoginForm, MessageForm, GroupChatForm, ProfileForm
 from datetime import datetime
-import os
 from werkzeug.utils import secure_filename
 from wtforms.validators import DataRequired, Email, Length, EqualTo
 from sqlalchemy import or_
+import json
+import time
+from urllib.parse import urlparse
+# Comment out these lines temporarily
+# from dotenv import load_dotenv
+# load_dotenv()
+
+# Set environment before creating Flask app
+os.environ['FLASK_ENV'] = os.environ.get('FLASK_ENV', 'development')
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your_secret_key_here'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your_secret_key_here')
+
+# Change this part to use FLASK_ENV instead of app.config['ENV']
+if os.environ.get('FLASK_ENV') == 'production':
+    database_url = os.environ.get('DATABASE_URL')
+    if database_url:
+        app.config['SQLALCHEMY_DATABASE_URI'] = database_url.replace('postgres://', 'postgresql://')
+else:
+    # Use SQLite for local development
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///chat.db'
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
@@ -382,7 +400,78 @@ def leave_group(group_id):
     flash('You have left the group')
     return redirect(url_for('chat_dashboard'))
 
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-    app.run(debug=True)
+# Add these routes for real-time updates
+@app.route('/stream/private/<int:user_id>')
+@login_required
+def stream_private_messages(user_id):
+    def generate():
+        last_check = datetime.utcnow()
+        
+        while True:
+            # Get new messages since last check
+            new_messages = PrivateMessage.query.filter(
+                PrivateMessage.timestamp > last_check,
+                ((PrivateMessage.sender_id == current_user.id) & (PrivateMessage.receiver_id == user_id)) |
+                ((PrivateMessage.sender_id == user_id) & (PrivateMessage.receiver_id == current_user.id))
+            ).all()
+            
+            if new_messages:
+                # Format messages
+                messages_data = [{
+                    'content': msg.content,
+                    'sender_id': msg.sender_id,
+                    'timestamp': msg.timestamp.strftime('%H:%M'),
+                    'is_sent': msg.sender_id == current_user.id
+                } for msg in new_messages]
+                
+                yield f"data: {json.dumps(messages_data)}\n\n"
+                last_check = datetime.utcnow()
+            
+            time.sleep(1)  # Check every second
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+@app.route('/stream/group/<int:group_id>')
+@login_required
+def stream_group_messages(group_id):
+    def generate():
+        last_check = datetime.utcnow()
+        
+        while True:
+            # Get new messages since last check
+            new_messages = GroupMessage.query.filter(
+                GroupMessage.timestamp > last_check,
+                GroupMessage.group_id == group_id
+            ).all()
+            
+            if new_messages:
+                # Format messages
+                messages_data = [{
+                    'content': msg.content,
+                    'sender_id': msg.sender_id,
+                    'sender_name': User.query.get(msg.sender_id).username,
+                    'timestamp': msg.timestamp.strftime('%H:%M'),
+                    'is_sent': msg.sender_id == current_user.id
+                } for msg in new_messages]
+                
+                yield f"data: {json.dumps(messages_data)}\n\n"
+                last_check = datetime.utcnow()
+            
+            time.sleep(1)  # Check every second
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
+
+@app.route('/api/messages')
+@login_required
+def get_messages():
+    since = request.args.get('since', type=float)
+    messages = PrivateMessage.query.filter(
+        PrivateMessage.timestamp > datetime.fromtimestamp(since)
+    ).all()
+    return jsonify([{
+        'content': msg.content,
+        'sender_id': msg.sender_id,
+        'timestamp': msg.timestamp.timestamp()
+    } for msg in messages])
+
+app = app
